@@ -26,6 +26,10 @@ const HistorySchema = new mongoose.Schema({
         required: true,
         trim: true
     },
+    isPremium: {
+        type: Boolean,
+        default: false
+    },
     createdAt: {
         type: Date,
         default: Date.now

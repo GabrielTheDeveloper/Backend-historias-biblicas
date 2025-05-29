@@ -3,8 +3,8 @@ const History = require('../models/History');
 class HistoryController {
     static async createHistory(req, res) {
         try {
-            const { title, images, description, hystory } = req.body;
-            const newHistory = new History({ title, images, description, hystory });
+            const { title, images, description, hystory, isPremium } = req.body;
+            const newHistory = new History({ title, images, description, hystory, isPremium });
             await newHistory.save();
             res.status(201).json({ message: 'History created successfully', history: newHistory });
         } catch (error) {
@@ -28,8 +28,8 @@ class HistoryController {
     static async updateHistory(req, res) {
         try {
             const id = req.body.id || req.params.id;
-            const { title, images, description, hystory } = req.body;
-            const updatedHistory = await History.findByIdAndUpdate(id, { title, images, description, hystory }, { new: true });
+            const { title, images, description, hystory, isPremium } = req.body;
+            const updatedHistory = await History.findByIdAndUpdate(id, { title, images, description, hystory, isPremium }, { new: true });
             if (!updatedHistory) {
                 return res.status(404).json({ message: 'History not found' });
             }
