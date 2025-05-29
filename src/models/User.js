@@ -18,6 +18,10 @@ const UserSchema = new mongoose.Schema({
         unique: true,
         trim: true
     },
+    isPremium: {
+        type: Boolean,
+        default: false
+    },
     createdAt: {
         type: Date,
         default: Date.now
