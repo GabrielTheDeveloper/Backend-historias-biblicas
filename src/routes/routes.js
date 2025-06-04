@@ -1,6 +1,6 @@
 const UserController = require('../controller/UserController');
 const HistoryController = require('../controller/HistoryController');
-const PaymentController = require('../controller/PaymentController');
+const PaymentAndroidController = require('../controller/PaymentsAndroidController');
 
 const routes = require('express').Router();
 
@@ -11,6 +11,6 @@ routes.delete('/delete-history/:id', HistoryController.deleteHistory);
 routes.put('/update-history/:id', HistoryController.updateHistory);
 routes.get('/history/:id', HistoryController.getHistoryById);
 routes.get('/histories', HistoryController.getAllHistories);
-routes.post('/create-payment', PaymentController.createPayment);
+routes.post('/create-payment', PaymentAndroidController.CreateAPayment);
 
 module.exports = routes;
