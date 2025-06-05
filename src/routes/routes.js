@@ -12,5 +12,6 @@ routes.put('/update-history/:id', HistoryController.updateHistory);
 routes.get('/history/:id', HistoryController.getHistoryById);
 routes.get('/histories', HistoryController.getAllHistories);
 routes.post('/create-payment', PaymentAndroidController.CreateAPayment);
+routes.post('/receive-notification', PaymentAndroidController.receiveNotification);
 
 module.exports = routes;
