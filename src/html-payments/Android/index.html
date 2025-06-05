@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Processando Pagamento Google Pay</title>
+    <script src="https://pay.google.com/gp/p/js/pay.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            background-color: #f0f0f0;
+            color: #333;
+            text-align: center;
+        }
+        .message {
+            font-size: 1.2em;
+            margin-bottom: 20px;
+        }
+        .error {
+            color: red;
+            font-weight: bold;
+        }
+        .success {
+            color: green;
+            font-weight: bold;
+        }
+        #loading-indicator {
+            border: 4px solid #f3f3f3; 
+            border-top: 4px solid #3498db; 
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+            margin-top: 20px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+    <script>
+        let paymentsClient;
+        let userId = null;
+        let purchaseValue = null;
+
+        
+        const BACKEND_PAYMENT_URL = 'https://backend-historias-biblicas.onrender.com/api/payments/create';
+
+        
+        function getUrlParameter(name) {
+            name = name.replace(/[\[]/, '\\[').replace(/[\]]/, '\\]');
+            var regex = new RegExp('[\\?&]' + name + '=([^&#]*)');
+            var results = regex.exec(location.search);
+            return results === null ? '' : decodeURIComponent(results[1].replace(/\+/g, ' '));
+        }
+
+
+        function displayMessage(msg, type = '') {
+            const messageDiv = document.getElementById('status-message');
+            messageDiv.textContent = msg;
+            messageDiv.className = 'message ' + type;
+        }
+
+    
+        function hideLoading() {
+            document.getElementById('loading-indicator').style.display = 'none';
+        }
+
+        
+        async function sendPaymentToServer(paymentData) {
+            displayMessage('Processando pagamento...', 'info');
+            try {
+                const response = await fetch(BACKEND_PAYMENT_URL, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        paymentMethodData: paymentData.paymentMethodData,
+                        transactionInfo: {
+                            totalPrice: purchaseValue,
+                            currencyCode: 'BRL',
+                            displayItems: [{ label: 'Compra de Curso', type: 'TOTAL', price: purchaseValue }]
+                        },
+                        userId: userId
+                    })
+                });
+
+                const result = await response.json();
+                hideLoading();
+
+                if (response.ok && result.success) {
+                    displayMessage(`Pagamento ${result.status} com sucesso! ID: ${result.paymentIntentId}`, 'success');
+                    console.log('Resposta do Backend:', result);
+                    
+                } else {
+                    displayMessage(`Erro ao processar pagamento: ${result.error || result.message}`, 'error');
+                    console.error('Erro do Backend:', result);
+                    
+                    if (result.requiresAction && result.clientSecret) {
+                         displayMessage('Pagamento requer autenticação adicional. Por favor, complete a autenticação.', 'error');
+                    }
+                }
+            } catch (error) {
+                hideLoading();
+                displayMessage('Erro de comunicação com o servidor. Tente novamente.', 'error');
+                console.error('Erro de rede ou servidor:', error);
+            }
+        }
+
+        function initiateGooglePayFlow() {
+            
+            if (!userId || !purchaseValue) {
+                hideLoading();
+                displayMessage('Parâmetros de usuário ou valor de compra ausentes na URL.', 'error');
+                return;
+            }
+
+            const paymentDataRequest = {
+                apiVersion: 2,
+                apiVersionMinor: 0,
+                allowedPaymentMethods: [{
+                    type: 'CARD',
+                    parameters: {
+                        allowedAuthMethods: ['PAN_ONLY', 'CRYPTOGRAM_3DS'],
+                        allowedCardNetworks: ['VISA', 'MASTERCARD']
+                    },
+                    tokenizationSpecification: {
+                        type: 'PAYMENT_GATEWAY',
+                        parameters: {
+                            gateway: 'stripe', 
+                            'stripe:version': '2020-08-27',
+                            'stripe:publishableKey': 'pk_test_YOUR_PUBLISHABLE_KEY'
+                        }
+                    }
+                }],
+                transactionInfo: {
+                    totalPriceStatus: 'FINAL',
+                    totalPrice: purchaseValue, 
+                    currencyCode: 'BRL',
+                    countryCode: 'BR' 
+                },
+                merchantInfo: {
+                    merchantName: 'Sua Empresa' 
+                },
+                shippingAddressRequired: false 
+            };
+
+            paymentsClient.loadPaymentData(paymentDataRequest).then(paymentData => {
+                console.log('Opção de pagamento selecionada:', paymentData);
+                
+                sendPaymentToServer(paymentData);
+
+            }).catch(error => {
+                console.error('Erro ao carregar formas de pagamento:', error);
+                hideLoading();
+                if (error.statusCode && error.statusCode === 'CANCELED') {
+                    displayMessage('Seleção de pagamento cancelada pelo usuário.', 'info');
+                } else {
+                    displayMessage('Erro ao carregar opções de pagamento. Verifique o console.', 'error');
+                }
+            });
+        }
+
+        function onGooglePayLoaded() {
+            paymentsClient = new google.payments.api.PaymentsClient({ environment: 'TEST' });
+
+            
+            userId = getUrlParameter('id');
+            purchaseValue = getUrlParameter('value');
+
+            console.log('Parâmetros recebidos:', { userId, purchaseValue });
+
+            displayMessage('Carregando opções de pagamento...');
+
+            
+            paymentsClient.isReadyToPay({
+                apiVersion: 2,
+                apiVersionMinor: 0,
+                allowedPaymentMethods: [{
+                    type: 'CARD',
+                    parameters: {
+                        allowedAuthMethods: ['PAN_ONLY', 'CRYPTOGRAM_3DS'],
+                        allowedCardNetworks: ['VISA', 'MASTERCARD']
+                    }
+                }]
+            }).then(response => {
+                if (response.result) {
+                
+                    setTimeout(initiateGooglePayFlow, 100); 
+                } else {
+                    hideLoading();
+                    displayMessage('Google Pay não está disponível neste dispositivo/navegador.', 'error');
+                }
+            }).catch(error => {
+                hideLoading();
+                displayMessage('Erro ao verificar a disponibilidade do Google Pay.', 'error');
+                console.error('Erro isReadyToPay:', error);
+            });
+        }
+    </script>
+</head>
+<body onload="onGooglePayLoaded()">
+    <h1>Carregando Pagamento</h1>
+    <div id="status-message" class="message">Iniciando...</div>
+    <div id="loading-indicator"></div>
+</body>
+</html>
