@@ -3,7 +3,7 @@ const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const axios = require('axios');
 
 class PaymentsControllerAndroid {
-    static RN_NOTIFICATION_ENDPOINT = RN_NOTIFICATION_ENDPOINT;
+    static RN_NOTIFICATION_ENDPOINT = process.env.RN_NOTIFICATION_ENDPOINT;
 
     static async sendPaymentStatusNotification(userId, paymentIntentId, status, message, success, additionalData = {}) {
         try {
