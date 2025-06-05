@@ -1,30 +1,79 @@
 require('dotenv').config();
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const axios = require('axios');
+const WebSocket = require('ws');
 
 class PaymentsControllerAndroid {
     static RN_NOTIFICATION_ENDPOINT = process.env.RN_NOTIFICATION_ENDPOINT;
+    static userConnections = new Map();
+
+    static configureWebSocket(server) {
+        const wss = new WebSocket.Server({ noServer: true });
+        
+        server.on('upgrade', (request, socket, head) => {
+            const pathname = new URL(request.url, `http://${request.headers.host}`).pathname;
+            
+            if (pathname === '/payments/ws') {
+                wss.handleUpgrade(request, socket, head, (ws) => {
+                    wss.emit('connection', ws, request);
+                });
+            } else {
+                socket.destroy();
+            }
+        });
+        
+        wss.on('connection', (ws, request) => {
+            const params = new URLSearchParams(request.url.split('?')[1]);
+            const userId = params.get('userId');
+            
+            if (!userId) {
+                ws.close(4001, 'UserId não fornecido');
+                return;
+            }
+            
+            PaymentsControllerAndroid.userConnections.set(userId, ws);
+            
+            ws.on('close', () => {
+                PaymentsControllerAndroid.userConnections.delete(userId);
+            });
+            
+            ws.on('error', (error) => {
+                PaymentsControllerAndroid.userConnections.delete(userId);
+            });
+        });
+    }
 
     static async sendPaymentStatusNotification(userId, paymentIntentId, status, message, success, additionalData = {}) {
         try {
+            const ws = PaymentsControllerAndroid.userConnections.get(userId);
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: 'payment_update',
+                    userId,
+                    paymentIntentId,
+                    status,
+                    message,
+                    success,
+                    ...additionalData
+                }));
+            }
+            
             await axios.post(PaymentsControllerAndroid.RN_NOTIFICATION_ENDPOINT, {
-                userId: userId,
-                paymentIntentId: paymentIntentId,
-                status: status,
-                message: message,
-                success: success,
+                userId,
+                paymentIntentId,
+                status,
+                message,
+                success,
                 ...additionalData
             });
-        } catch (error) {
-            console.error('Erro ao enviar notificação de status de pagamento:', error.message);
-        }
+        } catch (error) {}
     }
 
     static async CreateAPayment(req, res) {
         const { paymentMethodData, transactionInfo, userId } = req.body;
 
-        if (!paymentMethodData || !paymentMethodData.tokenizationData || !paymentMethodData.tokenizationData.token) {
-            PaymentsControllerAndroid.sendPaymentStatusNotification(
+        if (!paymentMethodData?.tokenizationData?.token) {
+            await PaymentsControllerAndroid.sendPaymentStatusNotification(
                 userId,
                 null,
                 'invalid_request',
@@ -36,113 +85,137 @@ class PaymentsControllerAndroid {
 
         const googlePayToken = paymentMethodData.tokenizationData.token;
         const amount = parseFloat(transactionInfo.totalPrice) * 100;
-        const currency = transactionInfo.currencyCode;
-        const description = transactionInfo.displayItems && transactionInfo.displayItems.length > 0
-                                ? transactionInfo.displayItems[0].label
-                                : 'Compra de Curso';
+        const currency = transactionInfo.currencyCode || 'BRL';
+        const description = transactionInfo.displayItems?.[0]?.label || 'Compra de Curso';
 
         try {
             const paymentMethod = await stripe.paymentMethods.create({
                 type: 'card',
-                card: {
-                    token: googlePayToken,
-                },
+                card: { token: googlePayToken },
             });
 
             const paymentIntent = await stripe.paymentIntents.create({
-                amount: amount,
-                currency: currency,
+                amount,
+                currency,
                 payment_method: paymentMethod.id,
                 confirmation_method: 'manual',
                 confirm: true,
-                description: description,
-                metadata: {
-                    app_userId: userId,
-                },
+                description,
+                metadata: { app_userId: userId },
+                return_url: 'your-app://stripe-redirect',
             });
 
-            if (paymentIntent.status === 'succeeded') {
-                PaymentsControllerAndroid.sendPaymentStatusNotification(
-                    userId,
-                    paymentIntent.id,
-                    paymentIntent.status,
-                    'Pagamento processado com sucesso!',
-                    true
-                );
-                return res.status(200).json({
-                    success: true,
-                    message: 'Pagamento processado com sucesso!',
-                    paymentIntentId: paymentIntent.id,
-                    status: paymentIntent.status,
-                });
-            } else if (paymentIntent.status === 'requires_action') {
-                PaymentsControllerAndroid.sendPaymentStatusNotification(
-                    userId,
-                    paymentIntent.id,
-                    paymentIntent.status,
-                    'Pagamento requer autenticação adicional.',
-                    false,
-                    { clientSecret: paymentIntent.client_secret }
-                );
-                return res.status(200).json({
-                    success: false,
-                    message: 'Pagamento requer autenticação adicional. Redirecione o usuário.',
-                    paymentIntentId: paymentIntent.id,
-                    status: paymentIntent.status,
-                    clientSecret: paymentIntent.client_secret,
-                    requiresAction: true,
-                });
-            } else {
-                PaymentsControllerAndroid.sendPaymentStatusNotification(
-                    userId,
-                    paymentIntent.id,
-                    paymentIntent.status,
-                    `Erro inesperado no processamento do pagamento. Status: ${paymentIntent.status}`,
-                    false
-                );
-                return res.status(500).json({
-                    success: false,
-                    error: `Erro inesperado no processamento do pagamento. Status: ${paymentIntent.status}`,
-                    status: paymentIntent.status,
-                });
-            }
+            switch (paymentIntent.status) {
+                case 'succeeded':
+                    await PaymentsControllerAndroid.sendPaymentStatusNotification(
+                        userId,
+                        paymentIntent.id,
+                        paymentIntent.status,
+                        'Pagamento processado com sucesso!',
+                        true,
+                        { paymentIntent: JSON.stringify(paymentIntent) }
+                    );
+                    return res.status(200).json({
+                        success: true,
+                        paymentIntentId: paymentIntent.id,
+                        status: paymentIntent.status,
+                    });
 
+                case 'requires_action':
+                    await PaymentsControllerAndroid.sendPaymentStatusNotification(
+                        userId,
+                        paymentIntent.id,
+                        paymentIntent.status,
+                        'Pagamento requer autenticação adicional.',
+                        false,
+                        { clientSecret: paymentIntent.client_secret }
+                    );
+                    return res.status(200).json({
+                        requiresAction: true,
+                        clientSecret: paymentIntent.client_secret,
+                        paymentIntentId: paymentIntent.id,
+                    });
+
+                default:
+                    await PaymentsControllerAndroid.sendPaymentStatusNotification(
+                        userId,
+                        paymentIntent.id,
+                        paymentIntent.status,
+                        `Status de pagamento inesperado: ${paymentIntent.status}`,
+                        false
+                    );
+                    return res.status(400).json({
+                        error: `Status de pagamento inesperado: ${paymentIntent.status}`,
+                        status: paymentIntent.status,
+                    });
+            }
         } catch (error) {
-            let errorMessage = error.message || 'Erro interno do servidor ao processar o pagamento.';
-            if (error.type === 'StripeCardError') {
-                errorMessage = error.message;
-            }
+            const errorMessage = error.type === 'StripeCardError' 
+                ? error.message 
+                : 'Erro interno do servidor ao processar o pagamento.';
 
-            PaymentsControllerAndroid.sendPaymentStatusNotification(
+            await PaymentsControllerAndroid.sendPaymentStatusNotification(
                 userId,
-                error.raw && error.raw.payment_intent ? error.raw.payment_intent.id : null,
+                error.raw?.payment_intent?.id || null,
                 'failed',
                 errorMessage,
-                false
+                false,
+                { errorDetails: error.toString() }
             );
 
             return res.status(500).json({
-                success: false,
                 error: errorMessage,
+                details: process.env.NODE_ENV === 'development' ? error.toString() : undefined,
             });
         }
     }
 
     static async receivePaymentStatus(req, res) {
         const { userId, paymentIntentId, status, message, success, clientSecret } = req.body;
+        res.status(200).json({ received: true });
+    }
 
-        console.log('--- Notificação de Status de Pagamento Recebida ---');
-        console.log(`Usuário: ${userId}`);
-        console.log(`PaymentIntent ID: ${paymentIntentId || 'N/A'}`);
-        console.log(`Status: ${status}`);
-        console.log(`Mensagem: ${message}`);
-        console.log(`Sucesso: ${success}`);
-        if (clientSecret) {
-            console.log(`Client Secret (para 3DS): ${clientSecret}`);
+    static async confirmPayment(req, res) {
+        const { paymentIntentId } = req.body;
+
+        try {
+            const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+            
+            if (paymentIntent.status === 'succeeded') {
+                await PaymentsControllerAndroid.sendPaymentStatusNotification(
+                    paymentIntent.metadata.app_userId,
+                    paymentIntent.id,
+                    paymentIntent.status,
+                    'Pagamento confirmado com sucesso!',
+                    true
+                );
+                return res.status(200).json({ success: true });
+            }
+
+            const confirmedIntent = await stripe.paymentIntents.confirm(paymentIntentId);
+            
+            await PaymentsControllerAndroid.sendPaymentStatusNotification(
+                confirmedIntent.metadata.app_userId,
+                confirmedIntent.id,
+                confirmedIntent.status,
+                confirmedIntent.status === 'succeeded' 
+                    ? 'Pagamento confirmado com sucesso!' 
+                    : 'Pagamento requer ação adicional.',
+                confirmedIntent.status === 'succeeded',
+                { clientSecret: confirmedIntent.client_secret }
+            );
+
+            return res.status(200).json({
+                success: confirmedIntent.status === 'succeeded',
+                requiresAction: confirmedIntent.status === 'requires_action',
+                clientSecret: confirmedIntent.client_secret,
+            });
+        } catch (error) {
+            return res.status(500).json({ 
+                error: 'Erro ao confirmar pagamento',
+                details: process.env.NODE_ENV === 'development' ? error.toString() : undefined,
+            });
         }
-        console.log('--------------------------------------------------');
-
-        res.status(200).json({ received: true, message: 'Notificação de status de pagamento processada.' });
     }
 }
 

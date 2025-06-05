@@ -11,7 +11,10 @@ routes.delete('/delete-history/:id', HistoryController.deleteHistory);
 routes.put('/update-history/:id', HistoryController.updateHistory);
 routes.get('/history/:id', HistoryController.getHistoryById);
 routes.get('/histories', HistoryController.getAllHistories);
+
 routes.post('/create-payment', PaymentAndroidController.CreateAPayment);
-routes.post('/receive-notification', PaymentAndroidController.receivePaymentStatus);
+routes.post('/payment/confirm', PaymentAndroidController.confirmPayment);
+routes.post('/payment/status', PaymentAndroidController.receivePaymentStatus);
+routes.post('/payment/webhook', PaymentAndroidController.handleStripeWebhook);
 
 module.exports = routes;
